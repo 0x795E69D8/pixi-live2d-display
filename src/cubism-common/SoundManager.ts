@@ -1,13 +1,31 @@
 import { logger, remove } from "@/utils";
 
+interface AudioLoopHandle {
+    readonly file: string;
+    readonly loopStart: number;
+    readonly loopEnd: number;
+    readonly audioBuffer: AudioBuffer;
+    readonly gain: GainNode;
+    _stopped: boolean;
+}
+
+interface PreloadEntry {
+    audioBuffer: AudioBuffer;
+    loopStart: number;
+    loopEnd: number;
+}
+
 const TAG = "SoundManager";
 export const VOLUME = 0.5;
 
 const audioListenersWeakMap = new WeakMap();
 const audioCanplaythroughWeakMap = new WeakMap();
-const audioContextWeakMap = new WeakMap<HTMLAudioElement, AudioContext>();
 const audioAnalyserWeakMap = new WeakMap<HTMLAudioElement, AnalyserNode>();
 const audioSourceWeakMap = new WeakMap<HTMLAudioElement, MediaElementAudioSourceNode>();
+const audioBufferSourceWeakMap = new WeakMap<AudioLoopHandle, AudioBufferSourceNode>();
+const preloadMap = new Map<string, PreloadEntry>();
+
+let audioContext: AudioContext | null = null;
 /**
  * Manages all the sounds.
  */
@@ -17,7 +35,7 @@ export class SoundManager {
      */
     static audios: HTMLAudioElement[] = [];
     static analysers: AnalyserNode[] = [];
-    static contexts: AudioContext[] = [];
+    static loopHandles: AudioLoopHandle[] = [];
 
     protected static _volume = VOLUME;
 
@@ -31,6 +49,101 @@ export class SoundManager {
     static set volume(value: number) {
         this._volume = (value > 1 ? 1 : value < 0 ? 0 : value) || 0;
         this.audios.forEach((audio) => (audio.volume = this._volume));
+        this.loopHandles.forEach((handle) => (handle.gain.gain.value = this._volume));
+    }
+
+    /**
+     * Preload an opus file with vorbis loop tags LOOP_START and LOOP_END
+     * Will generally work for other formats but tags might not
+     * @param file - URL of the sound file.
+     */
+    static async preload(file: string): Promise<void> {
+        if (preloadMap.has(file)) return;
+
+        const context = this.getContext();
+
+        let arrayBuffer: ArrayBuffer;
+        let audioBuffer: AudioBuffer;
+        try {
+            const response = await fetch(file);
+            arrayBuffer = await response.arrayBuffer();
+            audioBuffer = await context.decodeAudioData(arrayBuffer.slice(0));
+        } catch (e) {
+            logger.warn(TAG, `Failed to preload "${file}"`, e);
+            throw e;
+        }
+
+        let loopStart = 0;
+        let loopEnd = audioBuffer.duration;
+        try {
+            const decoder = new TextDecoder();
+            const bytes = new Uint8Array(arrayBuffer, 0, Math.min(65536, arrayBuffer.byteLength));
+            const view = new DataView(arrayBuffer);
+
+            let sampleRate: number | undefined;
+            let loopStartSample: number | undefined;
+            let loopEndSample: number | undefined;
+
+            for (let i = 0; i < bytes.length - 4; i++) {
+                if (
+                    bytes[i] !== 0x4f ||
+                    bytes[i + 1] !== 0x67 ||
+                    bytes[i + 2] !== 0x67 ||
+                    bytes[i + 3] !== 0x53
+                )
+                    continue;
+
+                if (i + 27 >= bytes.length) continue;
+                const numSegments = bytes[i + 26];
+                const dataStart = i + 27 + numSegments!;
+
+                // OpusTags (comments)
+                if (
+                    bytes
+                        .subarray(dataStart, dataStart + 8)
+                        .every((b, i) => b === "OpusTags".charCodeAt(i))
+                ) {
+                    let pos = dataStart + 8;
+                    const vendorLen = view.getUint32(pos, true);
+                    pos += 4 + vendorLen;
+                    const commentCount = view.getUint32(pos, true);
+                    pos += 4;
+
+                    for (let c = 0; c < commentCount; c++) {
+                        const len = view.getUint32(pos, true);
+                        pos += 4;
+                        const comment = decoder.decode(bytes.subarray(pos, pos + len));
+                        pos += len;
+
+                        const eq = comment.indexOf("=");
+                        const key = comment.slice(0, eq).toUpperCase();
+                        const val = comment.slice(eq + 1);
+                        if (key === "SAMPLE_RATE") sampleRate = parseInt(val);
+                        if (key === "LOOP_START") loopStartSample = parseInt(val);
+                        if (key === "LOOP_END") loopEndSample = parseInt(val);
+                    }
+                }
+
+                if (sampleRate && loopStartSample && loopEndSample) break;
+            }
+
+            if (!isNaN(sampleRate!) && !isNaN(loopStartSample!) && !isNaN(loopEndSample!)) {
+                loopStart = loopStartSample! / sampleRate!;
+                loopEnd = loopEndSample! / sampleRate!;
+            }
+        } catch (e) {
+            logger.warn(TAG, `Could not read loop metadata for "${file}", will loop full track`, e);
+        }
+
+        preloadMap.set(file, { audioBuffer, loopStart, loopEnd });
+    }
+
+    /**
+     * Unload a preloaded file
+     * @param file - URL of the sound file.
+     */
+    static unload(file: string): void {
+        preloadMap.delete(file);
     }
 
     // TODO: return an ID?
@@ -50,7 +163,6 @@ export class SoundManager {
     ): HTMLAudioElement {
         const audio = new Audio(file);
 
-        audio.volume = this._volume;
         audio.preload = "auto";
         // audio.autoplay = true;
         audio.crossOrigin = crossOrigin!;
@@ -71,6 +183,34 @@ export class SoundManager {
         this.audios.push(audio);
 
         return audio;
+    }
+
+    /**
+     * Prepare preloaded looping audio for playback
+     * @param file - URL of the sound file.
+     * @returns LoopHandle for created audio buffer.
+     */
+    static addLooping(file: string): AudioLoopHandle {
+        const preloaded = preloadMap.get(file);
+        if (!preloaded) {
+            throw new Error(`${TAG}: "${file}" has not been preloaded. Call preload() first.`);
+        }
+
+        const { audioBuffer, loopStart, loopEnd } = preloaded;
+        const context = this.getContext();
+        const gain = context.createGain();
+        gain.connect(context.destination);
+
+        const handle: AudioLoopHandle = {
+            file,
+            audioBuffer,
+            gain,
+            loopStart,
+            loopEnd,
+            _stopped: false,
+        };
+        this.loopHandles.push(handle);
+        return handle;
     }
 
     /**
@@ -95,17 +235,74 @@ export class SoundManager {
         });
     }
 
-    static addContext(audio: HTMLAudioElement): AudioContext {
-        /* Create an AudioContext */
-        const context = new AudioContext();
-        audioContextWeakMap.set(audio, context);
+    /**
+     * Play a looping audio by LoopHandle
+     * @param handle - LoopHandle of the audio buffer
+     */
+    static playLooping(handle: AudioLoopHandle): void {
+        if (handle._stopped) {
+            logger.warn(TAG, `playLooping called on stopped handle for "${handle.file}"`);
+            return;
+        }
+        const context = this.getContext();
 
-        this.contexts.push(context);
-        return context;
+        const existing = audioBufferSourceWeakMap.get(handle);
+        if (existing) {
+            try {
+                existing.stop();
+            } catch (e) {
+                logger.error(TAG, `Error stopping "${handle.file}"`, e);
+            }
+            existing.disconnect();
+            audioBufferSourceWeakMap.delete(handle);
+        }
+
+        const source = context.createBufferSource();
+        source.buffer = handle.audioBuffer;
+        source.loop = true;
+        source.loopStart = handle.loopStart;
+        source.loopEnd = handle.loopEnd;
+        source.connect(handle.gain);
+        audioBufferSourceWeakMap.set(handle, source);
+
+        source.start();
     }
 
-    static addAnalyzer(audio: HTMLAudioElement, context: AudioContext): AnalyserNode {
+    /**
+     * Stop and clear a looping audio by LoopHandle
+     * @param handle - LoopHandle of the audio buffer
+     */
+    static stopLooping(handle: AudioLoopHandle): void {
+        handle._stopped = true;
+        const existing = audioBufferSourceWeakMap.get(handle);
+        if (existing) {
+            try {
+                existing.stop();
+            } catch (e) {
+                logger.error(TAG, `Error stopping "${handle.file}"`, e);
+            }
+            existing.disconnect();
+            audioBufferSourceWeakMap.delete(handle);
+        }
+        handle.gain.disconnect();
+        remove(this.loopHandles, handle);
+    }
+
+    /**
+     * Get AudioContext of this SoundManager
+     * @returns - AudioContext
+     */
+    static getContext(): AudioContext {
+        /* Create or get the AudioContext */
+        if (!audioContext || audioContext.state === "closed") {
+            audioContext = new AudioContext();
+        }
+        return audioContext;
+    }
+
+    static addAnalyzer(audio: HTMLAudioElement): AnalyserNode {
         /* Create an AnalyserNode */
+        const context = this.getContext();
         const source = context.createMediaElementSource(audio);
         const analyser = context.createAnalyser();
 
@@ -129,18 +326,14 @@ export class SoundManager {
      * @return Returns value to feed into lip sync
      */
     static analyze(analyser: AnalyserNode): number {
-        if (analyser != undefined) {
-            const pcmData = new Float32Array(analyser.fftSize);
-            let sumSquares = 0.0;
-            analyser.getFloatTimeDomainData(pcmData);
+        const pcmData = new Float32Array(analyser.fftSize);
+        let sumSquares = 0.0;
+        analyser.getFloatTimeDomainData(pcmData);
 
-            for (const amplitude of pcmData) {
-                sumSquares += amplitude * amplitude;
-            }
-            return parseFloat(Math.sqrt((sumSquares / pcmData.length) * 20).toFixed(1));
-        } else {
-            return parseFloat(Math.random().toFixed(1));
+        for (const amplitude of pcmData) {
+            sumSquares += amplitude * amplitude;
         }
+        return parseFloat(Math.sqrt((sumSquares / pcmData.length) * 20).toFixed(1));
     }
 
     /**
@@ -154,9 +347,6 @@ export class SoundManager {
         audio.removeEventListener("canplaythrough", audioCanplaythroughWeakMap.get(audio));
         audioListenersWeakMap.delete(audio);
         audioCanplaythroughWeakMap.delete(audio);
-        const context = audioContextWeakMap.get(audio);
-        audioContextWeakMap.delete(audio);
-        context?.close();
         const analyser = audioAnalyserWeakMap.get(audio);
         audioAnalyserWeakMap.delete(audio);
         analyser?.disconnect();
@@ -165,7 +355,6 @@ export class SoundManager {
         source?.disconnect();
         audio.removeAttribute("src");
         remove(this.analysers, analyser);
-        remove(this.contexts, context);
         remove(this.audios, audio);
     }
 
@@ -174,12 +363,14 @@ export class SoundManager {
      */
     static destroy(): void {
         // dispose() removes given audio from the array, so the loop must be backward
-        for (let i = this.contexts.length - 1; i >= 0; i--) {
-            this.contexts[i]!.close();
-        }
-
         for (let i = this.audios.length - 1; i >= 0; i--) {
             this.dispose(this.audios[i]!);
         }
+        for (let i = this.loopHandles.length - 1; i >= 0; i--) {
+            this.stopLooping(this.loopHandles[i]!);
+        }
+        preloadMap.clear();
+        audioContext?.close();
+        audioContext = null;
     }
 }

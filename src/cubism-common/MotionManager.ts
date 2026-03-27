@@ -298,11 +298,11 @@ export abstract class MotionManager<Motion = any, MotionSpec = any> extends util
                 SoundManager.volume = volume;
 
                 // Add context
-                context = SoundManager.addContext(this.currentAudio);
+                context = SoundManager.getContext();
                 this.currentContext = context;
 
                 // Add analyzer
-                analyzer = SoundManager.addAnalyzer(this.currentAudio, this.currentContext);
+                analyzer = SoundManager.addAnalyzer(this.currentAudio);
                 this.currentAnalyzer = analyzer;
             } catch (e) {
                 logger.warn(this.tag, "Failed to create audio", soundURL, e);
@@ -448,11 +448,11 @@ export abstract class MotionManager<Motion = any, MotionSpec = any> extends util
                 SoundManager.volume = volume;
 
                 // Add context
-                context = SoundManager.addContext(this.currentAudio);
+                context = SoundManager.getContext();
                 this.currentContext = context;
 
                 // Add analyzer
-                analyzer = SoundManager.addAnalyzer(this.currentAudio, this.currentContext);
+                analyzer = SoundManager.addAnalyzer(this.currentAudio);
                 this.currentAnalyzer = analyzer;
             } catch (e) {
                 logger.warn(this.tag, "Failed to create audio", soundURL, e);
