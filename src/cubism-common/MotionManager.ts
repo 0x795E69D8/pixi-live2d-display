@@ -224,7 +224,7 @@ export abstract class MotionManager<Motion = any, MotionSpec = any> extends util
      * @returns Promise that resolves with true if the sound is playing, false if it's not
      */
     async speak(
-        sound: string,
+        sound: string | HTMLAudioElement,
         {
             volume = VOLUME,
             expression,
@@ -245,86 +245,79 @@ export abstract class MotionManager<Motion = any, MotionSpec = any> extends util
             return false;
         }
 
-        let audio: HTMLAudioElement | undefined;
-        let analyzer: AnalyserNode | undefined;
-        let context: AudioContext | undefined;
-
         if (this.currentAudio) {
             if (!this.currentAudio.ended) {
                 return false;
             }
         }
-        let soundURL: string | undefined;
-        const isBase64Content = sound && sound.startsWith("data:");
 
-        if (sound && !isBase64Content) {
-            const A = document.createElement("a");
-            A.href = sound;
-            sound = A.href; // This should be the absolute url
-            // since resolveURL is not working for some reason
-            soundURL = sound;
+        const handleFinish = () => {
+            console.log("Audio finished playing"); // Add this line
+            onFinish?.();
+            resetExpression &&
+                expression &&
+                this.expressionManager &&
+                this.expressionManager.resetExpression();
+            this.currentAudio = undefined;
+        }; // reset expression when audio is done
+
+        const handleError = (e: Error) => {
+            console.log("Error during audio playback:", e); // Add this line
+            onError?.(e);
+            resetExpression &&
+                expression &&
+                this.expressionManager &&
+                this.expressionManager.resetExpression();
+            this.currentAudio = undefined;
+        }; // on error
+
+        if (sound instanceof HTMLAudioElement) {
+            sound.addEventListener("ended", handleFinish, { once: true });
+            sound.addEventListener("error", (e) => handleError(e.error), { once: true });
+            sound.volume = volume;
         } else {
-            soundURL = "data:audio/"; // This is a dummy url to avoid showing the entire base64 content in logger.warn
-        }
-        const file: string | undefined = sound;
-        if (file) {
-            try {
-                // start to load the audio
-                audio = SoundManager.add(
-                    file,
-                    (that = this) => {
-                        console.log("Audio finished playing"); // Add this line
-                        onFinish?.();
-                        resetExpression &&
-                            expression &&
-                            that.expressionManager &&
-                            that.expressionManager.resetExpression();
-                        that.currentAudio = undefined;
-                    }, // reset expression when audio is done
-                    (e, that = this) => {
-                        console.log("Error during audio playback:", e); // Add this line
-                        onError?.(e);
-                        resetExpression &&
-                            expression &&
-                            that.expressionManager &&
-                            that.expressionManager.resetExpression();
-                        that.currentAudio = undefined;
-                    }, // on error
-                    crossOrigin,
-                );
+            const isBase64Content = sound.startsWith("data:");
 
-                this.currentAudio = audio!;
+            if (!isBase64Content) {
+                const A = document.createElement("a");
+                A.href = sound;
+                sound = A.href; // This should be the absolute url
+            }
 
-                SoundManager.volume = volume;
-
-                // Add context
-                context = SoundManager.getContext();
-                this.currentContext = context;
-
-                // Add analyzer
-                analyzer = SoundManager.addAnalyzer(this.currentAudio);
-                this.currentAnalyzer = analyzer;
-            } catch (e) {
-                logger.warn(this.tag, "Failed to create audio", soundURL, e);
+            // start to load the audio
+            const audio = SoundManager.add(sound, handleFinish, handleError, crossOrigin);
+            if (!audio) {
+                const soundURL = isBase64Content ? "data:audio/" : sound;
+                logger.warn(this.tag, "Failed to create audio", soundURL);
 
                 return false;
             }
+
+            sound = audio;
+
+            SoundManager.volume = volume;
         }
 
-        if (audio) {
-            let playSuccess = true;
-            const readyToPlay = SoundManager.play(audio).catch((e) => {
-                logger.warn(this.tag, "Failed to play audio", audio!.src, e);
-                playSuccess = false;
-            });
+        this.currentAudio = sound;
 
-            if (config.motionSync) {
-                // wait until the audio is ready
-                await readyToPlay;
+        // Add context
+        this.currentContext = SoundManager.getContext();
 
-                if (!playSuccess) {
-                    return false;
-                }
+        // Add analyzer
+        this.currentAnalyzer = SoundManager.addAnalyzer(this.currentAudio);
+
+        let playSuccess = true;
+        const readyToPlay = SoundManager.play(this.currentAudio).catch((e) => {
+            logger.warn(this.tag, "Failed to play audio", e);
+            playSuccess = false;
+        });
+
+        if (config.motionSync) {
+            // wait until the audio is ready
+            await readyToPlay;
+
+            if (!playSuccess) {
+                return false;
             }
         }
 

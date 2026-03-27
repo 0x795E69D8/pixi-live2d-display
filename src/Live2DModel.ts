@@ -225,7 +225,7 @@ export class Live2DModel<IM extends InternalModel = InternalModel> extends Conta
      * @returns Promise that resolves with true if the sound is playing, false if it's not
      */
     speak(
-        sound: string,
+        sound: string | HTMLAudioElement,
         {
             volume = VOLUME,
             expression,
