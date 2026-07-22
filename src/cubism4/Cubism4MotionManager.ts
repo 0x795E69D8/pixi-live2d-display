@@ -85,15 +85,13 @@ export class Cubism4MotionManager extends MotionManager<CubismMotion, CubismSpec
 
         // overwrite the fading duration only when it's not defined in the motion JSON
         if (json.getMotionFadeInTime() === undefined) {
-            motion.setFadeInTime(
-                definition.FadeInTime! > 0 ? definition.FadeInTime! : defaultFadingDuration,
-            );
+            const fadeInTime = definition.FadeInTime ?? -1;
+            motion.setFadeInTime(fadeInTime >= 0 ? fadeInTime : defaultFadingDuration);
         }
 
         if (json.getMotionFadeOutTime() === undefined) {
-            motion.setFadeOutTime(
-                definition.FadeOutTime! > 0 ? definition.FadeOutTime! : defaultFadingDuration,
-            );
+            const fadeOutTime = definition.FadeOutTime ?? -1;
+            motion.setFadeOutTime(fadeOutTime >= 0 ? fadeOutTime : defaultFadingDuration);
         }
 
         motion.setEffectIds(this.eyeBlinkIds, this.lipSyncIds);

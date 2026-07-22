@@ -52,8 +52,10 @@ export class Cubism2MotionManager extends MotionManager<Live2DMotion, Cubism2Spe
                 ? config.idleMotionFadingDuration
                 : config.motionFadingDuration;
 
-        motion.setFadeIn(definition.fade_in! > 0 ? definition.fade_in! : defaultFadingDuration);
-        motion.setFadeOut(definition.fade_out! > 0 ? definition.fade_out! : defaultFadingDuration);
+        const fadeInTime = definition.fade_in ?? -1;
+        motion.setFadeIn(fadeInTime >= 0 ? fadeInTime : defaultFadingDuration);
+        const fadeOutTime = definition.fade_out ?? -1;
+        motion.setFadeOut(fadeOutTime >= 0 ? fadeOutTime : defaultFadingDuration);
 
         return motion;
     }
