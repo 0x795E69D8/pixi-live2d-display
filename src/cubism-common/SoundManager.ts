@@ -303,20 +303,26 @@ export class SoundManager {
     static addAnalyzer(audio: HTMLAudioElement): AnalyserNode {
         /* Create an AnalyserNode */
         const context = this.getContext();
-        const source = context.createMediaElementSource(audio);
-        const analyser = context.createAnalyser();
+        let source = audioSourceWeakMap.get(audio);
+        if (!source) {
+            source = context.createMediaElementSource(audio);
+            audioSourceWeakMap.set(audio, source);
+        }
+        let analyser = audioAnalyserWeakMap.get(audio);
+        if (!analyser) {
+            analyser = context.createAnalyser();
 
-        analyser.fftSize = 256;
-        analyser.minDecibels = -90;
-        analyser.maxDecibels = -10;
-        analyser.smoothingTimeConstant = 0.85;
+            analyser.fftSize = 256;
+            analyser.minDecibels = -90;
+            analyser.maxDecibels = -10;
+            analyser.smoothingTimeConstant = 0.85;
 
-        source.connect(analyser);
-        analyser.connect(context.destination);
+            source.connect(analyser);
+            analyser.connect(context.destination);
 
-        audioSourceWeakMap.set(audio, source);
-        audioAnalyserWeakMap.set(audio, analyser);
-        this.analysers.push(analyser);
+            audioAnalyserWeakMap.set(audio, analyser);
+            this.analysers.push(analyser);
+        }
         return analyser;
     }
 

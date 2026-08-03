@@ -246,7 +246,7 @@ export class Cubism2InternalModel extends InternalModel {
         this.updateFocus();
         this.updateNaturalMovements(dt, now);
 
-        if (this.lipSync && this.motionManager.currentAudio) {
+        if (this.lipSync && this.motionManager.currentAnalyzer) {
             let value = this.motionManager.mouthSync();
             let min_ = 0;
             const max_ = 1;

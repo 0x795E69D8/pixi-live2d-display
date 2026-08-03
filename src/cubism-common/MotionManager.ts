@@ -215,7 +215,7 @@ export abstract class MotionManager<Motion = any, MotionSpec = any> extends util
 
     /**
      * Only play sound with lip sync
-     * @param sound - The audio url to file or base64 content
+     * @param sound - The audio url to file, base64 content or HTMLAudioElement
      * ### OPTIONAL: {name: value, ...}
      * @param volume - Volume of the sound (0-1)
      * @param expression - In case you want to mix up a expression while playing sound (bind with Model.expression())
@@ -331,6 +331,38 @@ export abstract class MotionManager<Motion = any, MotionSpec = any> extends util
         this.playing = true;
 
         return true;
+    }
+
+    /**
+     * Sync characters lips to audio that's already being spoken by another character
+     * @param audio - The HTMLAudioElement being spoken by another character
+     */
+    syncMouthTo(audio: HTMLAudioElement): void {
+        if (audio.ended) return;
+
+        this.currentAudio = audio;
+        this.currentAnalyzer = SoundManager.addAnalyzer(audio);
+        this.playing = true;
+
+        audio.addEventListener(
+            "ended",
+            () => {
+                // Only unsync if we're still synced to this audio.
+                if (this.currentAudio === audio) {
+                    this.unsyncMouth();
+                }
+            },
+            { once: true },
+        );
+    }
+
+    /**
+     * Unsync characters lips from previous syncMouthTo(audio)
+     */
+    unsyncMouth(): void {
+        this.currentAudio = undefined;
+        this.currentAnalyzer = undefined;
+        this.playing = false;
     }
 
     /**

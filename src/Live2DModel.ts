@@ -260,6 +260,17 @@ export class Live2DModel<IM extends InternalModel = InternalModel> extends Conta
     }
 
     /**
+     * Sync lips to another model that's already speaking without having to play the same audio again.
+     * Useful for group voice lines.
+     * @param model - The other model that's currently using Live2DModel.speak()
+     */
+    syncSpeak(model: Live2DModel): void {
+        const audio = model.internalModel.motionManager.currentAudio;
+        if (!audio) return;
+        return this.internalModel.motionManager.syncMouthTo(audio);
+    }
+
+    /**
      * Shorthand to set an expression.
      * @param id - Either the index, or the name of the expression. If not presented, a random expression will be set.
      * @return Promise that resolves with true if succeeded, with false otherwise.
